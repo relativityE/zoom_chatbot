@@ -1,0 +1,74 @@
+//move jsons here
+
+json_intro = {
+  "robot_jid" : process.env.bot_jid,
+  "to_jid" : toJid,
+  "account_id" : accountId,
+  "content" : {
+    "head" : {
+      "text" : "Hi I'm the Fives chatbot!",
+      "sub_head": {
+        "text": "Play the game?"
+      }
+    },
+    "body" : [{
+      "type" : "actions",
+      "items" : [{
+        "text" : "Five",
+        "value" : "5",
+        "style" : "Primary"
+      },
+      {
+        "text" : "Zero",
+        "value" : "0",
+        "style" : "Danger"
+      }]
+    }]
+  }
+}
+
+json_echo = {
+ "robot_jid" : process.env.bot_jid,
+ "to_jid" : toJid,
+ "account_id" : accountId,
+ "content" : {
+   "head" : {
+     "text" : "Fives chatbot!",
+     "sub_head": {
+       "text": "echo msg"
+     }
+   },
+   "body" : [{
+     "type" : "message",
+     "text" : payload.name + ', you sent: ' + payload.cmd
+   }]
+ }
+}
+
+
+
+try {
+  await chatbot.handle({ body, headers });
+  //chatbot echo msg to user
+  await zoomApp.sendMessage( json_echo )
+  //res.send(msg)
+} catch (err) {
+    console.log('chatbot error sending to user: ', err)
+}
+
+
+//send chatbot welcome message to new user
+try {
+  console.log('body ================================')
+  console.dir(body)
+  console.log('headers =============================')
+  console.dir(headers)
+  await chatbot.handle({ body, headers });
+  //chatbot msg to user
+  await zoomApp.sendMessage( json_intro )
+  //res.send(msg)
+} catch (err) {
+    console.log('chatbot error sending to user: ', err)
+}
+
+module.export = json_intro, json_echo
