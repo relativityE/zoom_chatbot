@@ -5,7 +5,7 @@ Required External Modules
 require ('dotenv').config()
 const express = require('express')
 const bodyParser = require('body-parser')
-//const sqlite3 = require('sqlite3').verbose()
+const sqlite3 = require('sqlite3').verbose()
 /*
 App Variables
 // You cannot authorize the applic . This applic cannot be installed outside of the
@@ -18,6 +18,8 @@ const util = require('util')
 const { oauth2, client, setting, log, request } = require('@zoomus/chatbot')
 const app = express()
 const port = process.env.PORT || 5000 //use PORT if available
+const DB_PATH = './fives.db'
+const TKNDB_PATH = './tokenbot.db'
 
 /*
 App Configuration e.g. app.set()
@@ -36,20 +38,40 @@ const chatbot = client( process.env.client_id,
 app.locals.chatbot = chatbot
 console.log('client - chatbot : ', chatbot)
 
-//create & open new database
-// const db = new sqlite3.Database('./chicken.db', err => {
-//   if(err) {
-//     return console.log(`database error: ${err.message}`)
-//   }
-//     console.log('succesful connection to chicken database')
-//   })
-  //===========>>>>>>>
-  //remember  //close db every open
-  // db.close( err => {
-  //  if(err) { return console.error(err.message)}
-  // console.log('chicken database closed')
-  //}
-  //===========>>>>>>>
+//create & open database for users & corresponding data
+function CreateChatBotDB(){
+  const db = new sqlite3.Database(DB_PATH, err => {
+    if(err) {
+      return console.log(`Creating database, ${DB_PATH}, failed: ${err.message}`)
+    }
+      console.log('Connected to ' + DB_PATH + ' database')
+      db.run('CREATE TABLE IF NOT EXISTS chatbot(name TEXT NOT NULL, hand INT NOT NULL)',
+      err => {
+        if(err) {
+          return console.error('failed to create chabot table: ' +err.message) }
+      console.log('chatbot table created!')
+      })
+    })
+    return db
+}
+
+
+//create database for access token refresh
+function CreateTokenDB(){
+  const tokendb = new sqlite3.Database(TKNDB_PATH, err => {
+    if(err) {
+      return console.log(`Creating database, ${TKNDB_PATH}, failed: ${err.message}`)
+    }
+      console.log('Connected to ' + TKNDB_PATH + ' database')
+      tokendb.run('CREATE TABLE IF NOT EXISTS app_tokens(accesstoken VARCHAR(800) NOT NULL, refreshtoken VARCHAR(800) NOT NULL, expires INT NOT NULL)',
+      err => {
+        if(err) {
+          return console.error('CREATE TABLE IF NOT EXISTS app_tokens: ' +err.message) }
+      console.log('app_tokens table created!')
+      })
+    })
+    return tokendb
+}
 
 
 //1a) install chatbot app
@@ -60,7 +82,6 @@ const authChatbot = async (req, res, next) => {
       process.env.auth_code = code
       let connection = await oauth2client.connectByCode(code)
       let zoomApp = chatbot.create({auth : connection})
-      //console.log('authChatbot - zoomApp created: ', zoomApp)
       app.locals.zoomApp = zoomApp
       console.log('authChatbot - app.locals.zoomApp: ', app.locals.zoomApp)
       next()
@@ -76,13 +97,13 @@ const authChatbot2 = async (req, res, next) => {
       console.log('authChatbot code : ', code)
       process.env.auth_code = code
       let connection = await oauth2client.connectByCode(code)
-      let zoomApp = chatbot.create({auth : connection})
-      //console.log('authChatbot - zoomApp created: ', zoomApp)
-      app.locals.zoomApp = zoomApp
+      app.locals.zoomApp = chatbot.create({auth : connection})
       console.log('authChatbot - app.locals.zoomApp: ', app.locals.zoomApp)
+      return app.locals.zoomApp
     } catch (err) {
       console.log(err)
       res.send(err)
+      return err
     }
 }
 /*
@@ -99,7 +120,6 @@ app.use('/', (req, res, next) => {
 //1b) oauth 2.0 - zoom prompts to request authorization from user to install chatbot
 app.get('/authorize', authChatbot, async (req, res) => {
     let { zoomApp } = app.locals
-    //zoomApp = await authChatbot2()
     let tokens = zoomApp.auth.getTokens()
     console.log('/authorize - zoomApp: ', zoomApp)
     process.env.access_tkn = tokens.access_token
@@ -108,7 +128,24 @@ app.get('/authorize', authChatbot, async (req, res) => {
 
     if(process.env.auth_code != ''){
       //save access_token & refresh_token, expire_time in database
-      //sqlite3?
+      //modify to check time expiration before sql updated
+      //probably use trick to set initial expire value to 1 so update happens always
+      //select expires from app_tokens
+      //db.get('select * from table')
+      let tokendb = CreateTokenDB();
+      tokendb.serialize(() => {
+        tokendb.run('INSERT INTO app_tokens (accesstoken, refreshtoken, expires) VALUES (?,?,?)',
+                [process.env.access_tkn, process.env.refresh_tkn, parseInt(process.env.expires_in)],
+              err => {
+                if(err) {
+                  return console.error('INSERT INTO app_tokens: ' +err.message) }
+              })
+      })
+      tokendb.close( err => {
+         if(err) {
+           return console.error('failed to close ' + TKNDB_PATH + ' database: ' +err.message) }
+       console.log( TKNDB_PATH + ' database closed' )
+      })
       console.log('/authorize - process.env.access_tkn: ', process.env.access_tkn)
       console.log('/authorize - process.env.refresh_tkn: ', process.env.refresh_tkn)
       console.log('/authorize - process.env.expires_in: ', process.env.expires_in)
@@ -220,6 +257,25 @@ app.post('/'+ process.env.slash_cmd, async (req, res) => {
       break;
     case 'interactive_message_actions':
       console.log('chatbot UI feedback from user:', body)
+
+      //store user input selection
+      //user & hand selected
+      //modify below to use select * from table where name=payload.name
+      //if return is empty, sql insert command, else sql update command
+      let db = CreateChatBotDB();
+      db.serialize(() => {
+        db.run('INSERT INTO chatbot(name, hand) VALUES (?,?)',
+                [payload.userName, parseInt(payload.actionItem.value)],
+              err => {
+                if(err)
+                  return console.error('INSERT INTO chatbot: ' +err.message)
+              })
+      })
+      db.close( err => {
+         if(err) {
+           return console.error('failed to close ' + DB_PATH + ' database: ' +err.message) }
+       console.log( DB_PATH + ' database closed' )
+      })
       break;
     default:
       console.log(`unaccounted for event: ${event}`)
