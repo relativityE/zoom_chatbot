@@ -1,3 +1,8 @@
+/* zoom testability issue:
+ You cannot authorize the applic . This applic cannot be installed outside of the
+ developer's account. Please contact the application developer to get support
+ with installing this application
+*/
 
 /*
 Required External Modules
@@ -8,9 +13,6 @@ const bodyParser = require('body-parser')
 const sqlite3 = require('sqlite3').verbose()
 /*
 App Variables
-// You cannot authorize the applic . This applic cannot be installed outside of the
-// developer's account. Please contact the application developer to get support
-// with installing this application.
 */
 
 //let { json_intro, json_echo } = require('./app.json')
@@ -40,17 +42,23 @@ console.log('client - chatbot : ', chatbot)
 
 //open database for users & corresponding data
 //delete if restarting? design choice
-function OpenChatDB(){
-  const db = new sqlite3.Database(DB_PATH, err => {
-    if(err) {
-      return console.log(`Creating database, ${DB_PATH}, failed: ${err.message}`)
-    }
-      console.log('Connected to ' + DB_PATH + ' database')
+function OpenChatDB( create ){
+  let FLAG = sqlite3.OPEN_READWRITE;
+  if ( create ) {
+    FLAG |= sqlite3.OPEN_CREATE
+  }
+  let db = new sqlite3.Database(DB_PATH, FLAG, err => {
+      if(err) return console.log(`Creating database, ${DB_PATH}, failed: ${err.message}`)
+      if(create){
+        console.log('Created ' + DB_PATH + ' database!')
+      }
+      else
+        console.log('Connected to ' + DB_PATH + ' database')
       db.run('CREATE TABLE IF NOT EXISTS chatbot(name TEXT NOT NULL UNIQUE, hand INT NOT NULL)',
       err => {
-        if(err) {
-          return console.error('failed to create chabot table: ' +err.message) }
-      console.log('chatbot table created!')
+        if(err) return console.error('failed to create chabot table: ' +err.message)
+
+        console.log('successfully opened chatbot table!')
       })
     })
     return db
@@ -58,17 +66,24 @@ function OpenChatDB(){
 
 
 //open database for access token refresh
-function OpenTokenDB(){
-  const tokendb = new sqlite3.Database(TKNDB_PATH, err => {
-    if(err) {
-      return console.log(`Creating database, ${TKNDB_PATH}, failed: ${err.message}`)
+function OpenTokenDB( create ){
+  let FLAG = sqlite3.OPEN_READWRITE;
+  if ( create ) {
+    FLAG |= sqlite3.OPEN_CREATE
+  }
+  const tokendb = new sqlite3.Database(TKNDB_PATH, FLAG, err => {
+    if(err) return console.log(`Creating database, ${TKNDB_PATH}, failed: ${err.message}`)
+    if( create ){
+      console.log('Created ' + TKNDB_PATH + ' database')
     }
+    else
       console.log('Connected to ' + TKNDB_PATH + ' database')
+
       tokendb.run('CREATE TABLE IF NOT EXISTS app_tokens(accesstoken VARCHAR(800) NOT NULL, refreshtoken VARCHAR(800) NOT NULL, expires INT NOT NULL)',
       err => {
-        if(err) {
-          return console.error('CREATE TABLE IF NOT EXISTS app_tokens: ' +err.message) }
-      console.log('app_tokens table created!')
+        if(err) return console.error('CREATE TABLE IF NOT EXISTS app_tokens: ' +err.message)
+
+        console.log('successfully opened app_tokens table!')
       })
     })
     return tokendb
@@ -92,6 +107,11 @@ async function authChatbot (req, res, next) {
     }
 }
 
+//create databases
+let db = OpenChatDB(true)
+let tokendb = OpenTokenDB(true)
+
+
 /*
 Route Definitions
 */
@@ -114,14 +134,11 @@ app.get('/authorize', async (req, res) => {
     process.env.expires_in = tokens.expires_in
 
     if(process.env.auth_code != ''){
-      //save access_token & refresh_token, expire_time in database
-      //modify to check time expiration before sql updated
-      //probably use trick to set initial expire value to 1 so update happens always
-      //select expires from app_tokens
-      //db.get('select * from table')
-      let tokendb = OpenTokenDB();
+      //check time expiration before sql updated
+      //used trick from article I read online to set initial expire value to 1 so update happens always
       let current_expiration = 0
       tokendb.serialize(() => {
+        tokendb = OpenTokenDB(false);
         tokendb.get('SELECT expires from app_tokens', (err, row) => {
           if(err) {return console.log('error getting token expiration: ', err.message)}
           console.log('token expiration in database: ', row.expires)
@@ -168,7 +185,6 @@ app.post('/'+ process.env.slash_cmd, async (req, res) => {
   console.dir(req.body)
   console.log('/fif headers =============================')
   console.dir(req.headers)
-  console.dir(res.headersSent)
 
   let { zoomApp } = app.locals
   let { body, headers } = req
@@ -259,34 +275,28 @@ app.post('/'+ process.env.slash_cmd, async (req, res) => {
     case 'interactive_message_actions':
       console.log('chatbot UI feedback from user:', body)
       let new_user = true
-      //store user input selection
-      //user & hand selected
       //check if new user first: use select * from table where name=payload.userName
       //row is undefined if result is empty, sql insert command, else sql update command
-      //'SELECT name FROM chatbot WHERE name=?' //payload.userName,// WHERE name=?
-      let db = OpenChatDB();
-      db.serialize(() => {
+      db.serialize( () => {
+        db = OpenChatDB(false);
         db.all('SELECT name FROM chatbot WHERE name=?', [payload.userName],
                  (err, rows) => {
           console.log(`perform SELECT operation on user: ${payload.userName}`)
-          console.log(`SELECT operation err: `)
-          console.dir(err)
-          console.log(`SELECT operation row: `)
+          if(err) return console.log(`SELECT name FROM chatbot, err: ${err.message}`)
+          console.log('SELECT name FROM chatbot  row(s): ')
           console.dir(rows)
 
-          if(err)
-            return console.error('SELECT name FROM chatbot: ' +err.message)
-          console.log('info retrieved from database, rows[0].name ' + rows[0].name)
-          console.log('info retrieved from database, rows: ')
-          console.dir(rows)
-          if(rows !== undefined) {
-            console.log('rows !== undefined')
+          if(rows !== undefined && rows.length > 0) { //sanity check, this should be fine if it got here
+            new_user = false
+            console.log('new_user status updated in SELECT operation, ', new_user)
+            console.log('user already in database, ', rows[0].name)
 
-            if( rows[0].name === payload.userName ){
-              console.log('rows.name === payload.userName new_user=false')
-              new_user = false
-              console.log('user already in database, ', rows.name)
-            }
+            db = OpenChatDB(false);
+            db.all('SELECT COUNT(*) FROM chatbot', [], (err, rows) => {
+              if(err) return console.error('SELECT COUNT(*) FROM chatbot, err: ' +err.message)
+              console.log('total number of entries in chatbot: ')
+              console.dir(rows)
+            })
           }
         })
 
@@ -294,24 +304,25 @@ app.post('/'+ process.env.slash_cmd, async (req, res) => {
         if (new_user) {
           console.log(`new_user: ${new_user}`)
           console.log('new user added to database: ' + payload.userName)
-
-          db.run('INSERT INTO chatbot(name, hand) VALUES (?,?)',
+          db = OpenChatDB(false);
+          db.run('INSERT INTO chatbot VALUES (?,?)',
                   [payload.userName, parseInt(payload.actionItem.value)],
                 err => {
                   console.log('perform INSERT operation')
+                  if(err.message.includes('UNIQUE constraint') ){
+                    db = OpenChatDB(false);
+                    //existing user:  UNIQUE constraint, attempt update
+                    db.run('UPDATE chatbot SET hand=? WHERE name=?',
+                          [parseInt(payload.actionItem.value), payload.userName],
+                          err => {
+                            console.log('perform UPDATE operation')
 
-                  if(err)
-                    return console.error('INSERT INTO chatbot: ' +err.message)
-                })
-        }
-        else { //existing user
-          db.run('UPDATE chatbot SET hand=? WHERE name=?',
-                [parseInt(payload.actionItem.value), payload.userName],
-                err => {
-                  console.log('perform UPDATE operation')
-
-                  if(err)
-                    return console.error('INSERT INTO chatbot: ' +err.message)
+                            if(err)
+                              return console.error('UPDATE chatbot, err: ' +err.message)
+                          })
+                  }
+                  else // any other error
+                    return console.error('INSERT INTO chatbot, err: ' +err.message)
                 })
         }
       })
