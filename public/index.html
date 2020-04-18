@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      p  {color:IndianRed;font-size:120%;background-color:GhostWhite}
+      .info {width:20em; height:4em; font-size:125% }
+    </style>
+    <title> Fives Chatbot Launch </title>
+  </head>
+  <body>
+    <h1>Welcome to fives chatbot game!</h1>
+    <div id='onetime_msg'>
+      <p>
+        To start chatbot server, please select checkbox and click submit!
+      </p>
+    </div>
+    <form method="get" class=".info" onsubmit="div_hide()">
+      <input type="checkbox" name="enable">
+      <label for="abc">Start Chatbot Server</label>
+      <br>
+      <input type="submit" value="Enable"/>
+    </form>
+
+    <script>
+      function div_hide(){
+        let div_id = document.getElementById('onetime_msg')
+        div_id.style.display = "none"
+        alert('Attempt to launch, if selected')
+      }
+    </script>
+  </body>
+</html>

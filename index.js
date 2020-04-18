@@ -11,24 +11,65 @@ require ('dotenv').config()
 const express = require('express')
 const bodyParser = require('body-parser')
 const sqlite3 = require('sqlite3').verbose()
+const ngrok = require('ngrok')
+const path  = require('path')
 /*
 App Variables
 */
 
+//webhook - push data to provider (they r http requests)
+//API - pull data from provider
 //let { json_intro, json_echo } = require('./app.json')
 const util = require('util')
 const { oauth2, client, setting, log, request } = require('@zoomus/chatbot')
 const app = express()
-const port = process.env.PORT || 5000 //use PORT if available
+const port = process.env.PORT || 5000 //use PORT for chatbot server if available
+//sqlite3 database - tables
 const DB_PATH = './fives.db'
 const TKNDB_PATH = './tokenbot.db'
+
+/*
+creates 2 tunnels (http, https) to localhost
+bind_tls = true (default)
+public HTTPS url for development on local machine
+can view http traffic for tunnel here:
+http://127.0.0.1:4040/inspect/http
+A tunnel is used to ship a foreign protocol across
+a network that normally wouldn’t support it.
+Automate ngrok via API - curl http://127.0.0.1:4040/api/
+*/
+//need a scheme to prevent multiple connect execution
+// => end up with connection refused till timeout expires
+const start_tunnel = async () => {
+    try {
+      console.log('::::::::ngrok.connect on port: ' + port )
+      const tunnel = await ngrok.connect(port)
+      console.log('::::::::tunnel url to visit via web browser: ' + tunnel)
+      return tunnel
+    } catch (err) {
+      console.error('::::::::failed to start tunnel, ' + err.message )
+    }
+  }
+
+//read console input from script to shut tunnel
+const end_tunnel = async () => {
+  try {
+    console.log(':::::::executing end_tunnel()')
+    //stop all tunnel connections and kill process
+    await ngrok.disconnect()
+    await ngrok.kill()
+    console.log(':::::::executed end_tunnel()')
+  } catch (err) {
+    console.error(':::::::failed to disconnect & kill tunnel, ' + err.message )
+  }
+}
+
 
 /*
 App Configuration e.g. app.set()
 */
 app.use(bodyParser.json())
 app.locals.requestcount = 0
-app.locals.zoomApp = 'undefined'
 //setup and configure json_chatbot_to_user
 const oauth2client = oauth2( process.env.client_id,
                              process.env.client_secret,
@@ -57,13 +98,11 @@ function OpenChatDB( create ){
       db.run('CREATE TABLE IF NOT EXISTS chatbot(name TEXT NOT NULL UNIQUE, hand INT NOT NULL)',
       err => {
         if(err) return console.error('failed to create chabot table: ' +err.message)
-
         console.log('successfully opened chatbot table!')
       })
     })
     return db
 }
-
 
 //open database for access token refresh
 function OpenTokenDB( create ){
@@ -82,7 +121,6 @@ function OpenTokenDB( create ){
       tokendb.run('CREATE TABLE IF NOT EXISTS app_tokens(accesstoken VARCHAR(800) NOT NULL, refreshtoken VARCHAR(800) NOT NULL, expires INT NOT NULL)',
       err => {
         if(err) return console.error('CREATE TABLE IF NOT EXISTS app_tokens: ' +err.message)
-
         console.log('successfully opened app_tokens table!')
       })
     })
@@ -115,13 +153,75 @@ let tokendb = OpenTokenDB(true)
 /*
 Route Definitions
 */
-app.use('/', (req, res, next) => {
-   console.log(`request ${req.method} ${req.url}, originalURL: ${req.originalUrl}`)
-   console.log('response object {headersSent}: ', res.headersSent)
+
+app.use((req, res, next) => {   //http request counter
+   console.log(`request ${req.method} ${req.url}`)
    app.locals.requestcount++
-   console.log('request count: ', app.locals.requestcount)
+   util.log('request count: ', app.locals.requestcount)
    next() //pass control to next route
  })
+
+//this is strictly a landing page for getting access to chatbot server
+app.get('/', async (req, res, next) => {
+  console.log('root dir request, / route')
+  console.log('web server root exposed: ', path.join(__dirname, 'public'))
+  const options = {
+    "root": path.join(__dirname, 'public'),
+    "dotfiles" : "deny",
+    "headers": {
+      "x-timestamp" : Date.now(),
+      "x-sent": true
+    }
+  }
+
+  if (req.query.enable === 'on') {
+    console.log('req.query (enable): ', req.query.enable)
+    //bypasses firewall/NAT, other network restrictions to connect
+    //via port 80 or 443 encapsulated using HTTP protocol
+    console.log('********executing start_tunnel()')
+    const url = await start_tunnel()
+    app.locals.url = url
+    console.log('*********executed start_tunnel()')
+    let msg = ''
+    if(url === undefined){
+       msg = "<H2>Server launch FAILED</H2>\
+       Likely due to too many rapid requests...\
+       <H3>Please click link below and wait a couple of minutes</H3>\
+       <a href=\"http://localhost:5000\">Home</a>"
+    }
+    else{
+       msg = "<H2>Click below to launch FIVES chatbot</H2><a href=" + url +
+      ">Chatbot Server</a>"
+    }
+    res.send(msg)
+    console.log('*********url update sent to browser client: ', url)
+  }
+  else {
+    console.log('req.query (enable (not on)): ', req.query)
+    console.log('app.locals.url: ', app.locals.url)
+    console.log('app.locals.whatever: ', app.locals.whatever)
+    console.log('app.locals: ')
+    console.dir(app.locals)
+    if( app.locals.url === undefined ){
+      const result = await end_tunnel()
+      console.log("disconnected and killed ngrok server")
+
+      const filename = 'index.html'
+      res.sendFile(filename, options, err => {
+        if(err){
+          console.error('sendFile failed: ' + err.message)
+          next(err)
+        } else {
+          console.log('File: ' + filename + ' sent!')
+        }
+    })
+    }
+    else {
+      res.send('<H1>Successfully launched FIVES!</H1>\
+      <H3>You\'re all done, head to zoom chat</H3>')
+  }
+}
+})
 
 //1b) oauth 2.0 - zoom prompts to request authorization from user to install chatbot
 app.get('/authorize', async (req, res) => {
@@ -337,16 +437,16 @@ app.post('/'+ process.env.slash_cmd, async (req, res) => {
   }
 })
 
-app.get('/', (req,res) => {
-   console.log('/ route {req.body}: ', req.body)
-   res.send("welcome aboard fives game, users")
-})
-
 /*
 Server Activation
 */
 app.listen(port, () => {
-  console.log('===============================================================')
-  util.log(`fives chatbot started, listening on port ${port}!`)
-  console.log('===============================================================')
+  console.log('================================================================')
+  util.log(`fives chatbot started, listening on port: ${port}`)
+  console.log("\n''''''''''''''''''''''''''")
+  console.log("'''''USER ATTENTION'''''''")
+  console.log("''''''''''''''''''''''''''\n")
+  console.log("Please launch your browser with the following url to continue")
+  console.log("\n=========>>>>    http://localhost:5000\n")
+  console.log('================================================================')
 })
